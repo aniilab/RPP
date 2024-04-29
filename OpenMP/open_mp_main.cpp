@@ -1,89 +1,75 @@
 #include <iostream>
 #include <fstream>
 #include <vector>
-#include <cstdlib>
 #include <algorithm>
-#include <climits>
-#include <mpi.h>
+#include <omp.h>
 
 using namespace std;
 
-void sequentialOddEvenSort(vector<int>& arr) {
-    bool isSorted = false;
-    int n = arr.size();
-    while (!isSorted) {
-        isSorted = true;
-        for (int i = 1; i < n; i += 2) {
-            if (arr[i - 1] > arr[i]) {
-                swap(arr[i - 1], arr[i]);
-                isSorted = false;
-            }
-        }
+void oddEvenSort(vector<int>& numbers, int numThreads) {
+    int n = numbers.size();
+    bool globallySorted = false;
+
+    while (!globallySorted) {
+        bool locallySorted = true;
+        
+        #pragma omp parallel for num_threads(numThreads) shared(numbers) reduction(&&:locallySorted)
         for (int i = 1; i < n - 1; i += 2) {
-            if (arr[i] > arr[i + 1]) {
-                swap(arr[i], arr[i + 1]);
-                isSorted = false;
+            if (numbers[i] > numbers[i + 1]) {
+                swap(numbers[i], numbers[i + 1]);
+                locallySorted = false;
             }
         }
+        
+        #pragma omp parallel for num_threads(numThreads) shared(numbers) reduction(&&:locallySorted)
+        for (int i = 0; i < n - 1; i += 2) {
+            if (numbers[i] > numbers[i + 1]) {
+                swap(numbers[i], numbers[i + 1]);
+                locallySorted = false;
+            }
+        }
+
+        globallySorted = locallySorted;
     }
 }
 
-int main(int argc, char **argv) {
-    MPI_Init(&argc, &argv);
-    int rank, size;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &size);
+int main() {
+    ifstream inputFile("randoms10.txt");
+    ofstream outputFile("output.txt");
 
-    ifstream inFile("randoms.txt");
-    vector<int> array;
-    int value;
-    while (inFile >> value) {
-        array.push_back(value);
-    }
-    inFile.close();
-
-    int N = array.size();
-    int remainder = N % size;
-    if (remainder != 0) {
-        int fillCount = size - remainder;
-        for (int i = 0; i < fillCount; ++i) {
-            array.push_back(INT_MAX);
-        }
-        N += fillCount;
+    if (!inputFile) {
+        cerr << "Error: Could not open input file." << endl;
+        return 1;
     }
 
-    vector<int> localArr(N / size);
-    MPI_Scatter(array.data(), N / size, MPI_INT, localArr.data(), N / size, MPI_INT, 0, MPI_COMM_WORLD);
+    vector<int> numbers;
+    int number;
+    while (inputFile >> number) {
+        numbers.push_back(number);
+    }
+    inputFile.close();
 
-    double startTimePar = MPI_Wtime();
-    sort(localArr.begin(), localArr.end());
-    double endTimePar = MPI_Wtime();
+    int startThreads, endThreads;
+    cout << "Enter the start and end number of threads: ";
+    cin >> startThreads >> endThreads;
 
-    vector<int> sortedArray(N);
-    MPI_Gather(localArr.data(), N / size, MPI_INT, sortedArray.data(), N / size, MPI_INT, 0, MPI_COMM_WORLD);
+    for (int numThreads = startThreads; numThreads <= endThreads; ++numThreads) {
+        vector<int> tempNumbers = numbers; 
+        double startTime = omp_get_wtime();
+        oddEvenSort(tempNumbers, numThreads);
+        double endTime = omp_get_wtime();
 
-    if (rank == 0) {
-        sortedArray.erase(remove(sortedArray.begin(), sortedArray.end(), INT_MAX), sortedArray.end());
-        ofstream outFilePar("ParallelSortedArray.txt");
-        for (int num : sortedArray) {
-            outFilePar << num << "\n";
+        cout << "Execution time with " << numThreads << " threads: "
+                  << (endTime - startTime) << " seconds." << endl;
+
+        if (numThreads == endThreads) {
+            for (int num : tempNumbers) {
+                outputFile << num << endl;
+            }
         }
-        outFilePar.close();
-
-        vector<int> sequentialArray = array;
-        sequentialArray.resize(N - (N % size)); // Видалення доданих INT_MAX
-        double startTimeSeq = MPI_Wtime();
-        sequentialOddEvenSort(sequentialArray);
-        double endTimeSeq = MPI_Wtime();
-        cout << "Sequential sort time: " << endTimeSeq - startTimeSeq << " seconds." << endl;
-
-        ofstream outFileSeq("SequentialSortedArray.txt");
-        for (int num : sequentialArray) {
-            outFileSeq << num << "\n";
-        }
-        outFileSeq.close();
     }
 
-    MPI_Finalize();
+    outputFile.close();
+    cin >> endThreads;
     return 0;
 }

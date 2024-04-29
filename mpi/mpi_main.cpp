@@ -68,20 +68,24 @@ void oddEvenSort(vector<int> &localArr, int rank, int size)
 
         if (partner >= 0 && partner < size)
         {
-            MPI_Sendrecv(localArr.data(), localArr.size(), MPI_INT, partner, 0,
-                         partnerData.data(), localArr.size(), MPI_INT, partner, 0,
-                         MPI_COMM_WORLD, &status);
-
             if (rank < partner)
             {
-                for (size_t i = 0; i < localArr.size(); ++i)
-                {
-                    localArr[i] = min(localArr[i], partnerData[i]);
-                }
+                MPI_Send(localArr.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD);
+                MPI_Recv(partnerData.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD, &status);
             }
             else
             {
-                for (size_t i = 0; i < localArr.size(); ++i)
+                MPI_Recv(partnerData.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD, &status);
+                MPI_Send(localArr.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD);
+            }
+
+            for (size_t i = 0; i < localArr.size(); ++i)
+            {
+                if (rank < partner)
+                {
+                    localArr[i] = min(localArr[i], partnerData[i]);
+                }
+                else
                 {
                     localArr[i] = max(localArr[i], partnerData[i]);
                 }
@@ -89,6 +93,7 @@ void oddEvenSort(vector<int> &localArr, int rank, int size)
         }
     }
 }
+
 int main(int argc, char **argv)
 {
     MPI_Init(&argc, &argv);
@@ -137,7 +142,7 @@ int main(int argc, char **argv)
     double endTimePar = MPI_Wtime();
 
     vector<int> sortedArray(N);
-    MPI_Allgather(localArr.data(), localN, MPI_INT, sortedArray.data(), localN, MPI_INT, MPI_COMM_WORLD);
+    MPI_Gather(localArr.data(), localN, MPI_INT, sortedArray.data(), localN, MPI_INT, 0, MPI_COMM_WORLD);
 
     if (rank == 0)
     {
