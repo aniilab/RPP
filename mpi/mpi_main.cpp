@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <algorithm>
 #include <mpi.h>
+#include <iomanip>
+#include <chrono>
 
 using namespace std;
 
@@ -33,69 +35,12 @@ void sequentialOddEvenSort(vector<int> &arr)
     }
 }
 
-void oddEvenSort(vector<int> &localArr, int rank, int size)
-{
-    vector<int> partnerData(localArr.size());
-    MPI_Status status;
+int main(int argc, char *argv[]) {
+    using std::chrono::high_resolution_clock;
+    using std::chrono::duration_cast;
+    using std::chrono::duration;
+    using std::chrono::milliseconds;
 
-    for (int phase = 0; phase < size; ++phase)
-    {
-        sort(localArr.begin(), localArr.end());
-
-        int partner;
-        if (phase % 2 == 0)
-        {
-            if (rank % 2 == 0)
-            {
-                partner = rank + 1;
-            }
-            else
-            {
-                partner = rank - 1;
-            }
-        }
-        else
-        {
-            if (rank % 2 == 0)
-            {
-                partner = rank - 1;
-            }
-            else
-            {
-                partner = rank + 1;
-            }
-        }
-
-        if (partner >= 0 && partner < size)
-        {
-            if (rank < partner)
-            {
-                MPI_Send(localArr.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD);
-                MPI_Recv(partnerData.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD, &status);
-            }
-            else
-            {
-                MPI_Recv(partnerData.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD, &status);
-                MPI_Send(localArr.data(), localArr.size(), MPI_INT, partner, 0, MPI_COMM_WORLD);
-            }
-
-            for (size_t i = 0; i < localArr.size(); ++i)
-            {
-                if (rank < partner)
-                {
-                    localArr[i] = min(localArr[i], partnerData[i]);
-                }
-                else
-                {
-                    localArr[i] = max(localArr[i], partnerData[i]);
-                }
-            }
-        }
-    }
-}
-
-int main(int argc, char **argv)
-{
     MPI_Init(&argc, &argv);
     int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
@@ -109,6 +54,8 @@ int main(int argc, char **argv)
         array.push_back(value);
     }
     inFile.close();
+
+    double totalParTime = 0;
 
     if (rank == 0)
     {
@@ -124,29 +71,43 @@ int main(int argc, char **argv)
         outFile.close();
     }
 
+    const int ROOT = 0;
     int N = array.size();
+    MPI_Bcast(&N, 1, MPI_INT, ROOT, MPI_COMM_WORLD);
+
     int localN = N / size;
-    int remainder = N % size; // Залишок елементів, які не розподілені рівномірно
+    int remainder = N % size;
 
-    // Кількість елементів, які потрібно додати до локального масиву для кожного процесу
-    int extraElements = (rank < remainder) ? 1 : 0;
+    vector<int> localBuffer(localN);
+    if (rank == size - 1) {
+        localBuffer.resize(localN + remainder);
+    }
 
-    // Розмір локального масиву для кожного процесу з додатковими елементами, якщо потрібно
-    localN += extraElements;
-
-    vector<int> localArr(localN);
-    MPI_Scatter(array.data(), localN, MPI_INT, localArr.data(), localN, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Scatter(array.data(), localBuffer.size(), MPI_INT, localBuffer.data(), localBuffer.size(), MPI_INT, ROOT, MPI_COMM_WORLD);
 
     double startTimePar = MPI_Wtime();
-    oddEvenSort(localArr, rank, size);
+    sequentialOddEvenSort(localBuffer);
     double endTimePar = MPI_Wtime();
+    double execTime = endTimePar - startTimePar;
+
+    cout << "Thread " << rank << ": " << fixed << execTime << " seconds" << endl;
+
+    MPI_Reduce(&execTime, &totalParTime, 1, MPI_DOUBLE, MPI_SUM, ROOT, MPI_COMM_WORLD);
 
     vector<int> sortedArray(N);
-    MPI_Gather(localArr.data(), localN, MPI_INT, sortedArray.data(), localN, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Gather(localBuffer.data(), localN, MPI_INT, sortedArray.data(), localN, MPI_INT, ROOT, MPI_COMM_WORLD);
 
-    if (rank == 0)
+    if (rank == ROOT)
     {
-        cout << "Parallel sort time: " << endTimePar - startTimePar << " seconds." << endl;
+        
+        auto startTime = high_resolution_clock::now();
+        sequentialOddEvenSort(sortedArray); 
+        auto endTime = high_resolution_clock::now();
+
+        duration<double> execTime = (endTime - startTime);
+
+        totalParTime += execTime.count();
+        cout << "Total parallel sort time: " << fixed << totalParTime << " seconds." << endl;
         ofstream outFile("ParallelSortedArray.txt");
         for (int num : sortedArray)
         {
@@ -156,5 +117,6 @@ int main(int argc, char **argv)
     }
 
     MPI_Finalize();
+
     return 0;
 }
